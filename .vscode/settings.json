@@ -1,0 +1,15 @@
+{
+    "editor.formatOnPaste": true,
+    "editor.formatOnSave": true,
+    "cSpell.words": [
+        "AORUS",
+        "EVGA",
+        "heim",
+        "leds",
+        "lerp",
+        "nvml",
+        "openrgb",
+        "ringbuffer",
+        "subsys"
+    ]
+}
