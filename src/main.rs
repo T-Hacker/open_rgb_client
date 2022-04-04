@@ -152,10 +152,22 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
         // Start main work loop.
         info!("Launching code to run requests...");
-        tokio::spawn(launch_client(
-            shutdown_notify.into(),
-            shutdown_completed_condv.clone().into(),
-        ));
+        {
+            let shutdown_notify = shutdown_notify.clone();
+            let shutdown_completed_condv = shutdown_completed_condv.clone();
+
+            tokio::spawn(async move {
+                match launch_client(
+                    shutdown_notify.into(),
+                    shutdown_completed_condv.clone().into(),
+                )
+                .await
+                {
+                    Ok(_) => info!("Exiting form loop, cleanly."),
+                    Err(e) => error!("Exiting from loop with error: {}", e),
+                };
+            });
+        }
 
         // Wait for the conditional variable for signal the end of the work loop is set.
         let (lock, cvar) = &*shutdown_completed_condv;
@@ -209,12 +221,12 @@ async fn launch_client(
         loop {
             tokio::select! {
                 _ = shutdown_notify.notified() => break,
-                _ = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => { /* Do nothing. */}
+                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => { if !result.is_ok() { break; }}
             }
         }
     } else {
-        loop {
-            sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await?;
+        while (sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await).is_ok() {
+            // Do nothing.
         }
     }
 
