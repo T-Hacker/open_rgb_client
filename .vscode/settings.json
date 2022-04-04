@@ -3,6 +3,9 @@
     "editor.formatOnSave": true,
     "cSpell.words": [
         "AORUS",
+        "condv",
+        "Condvar",
+        "cvar",
         "EVGA",
         "heim",
         "leds",
@@ -10,6 +13,7 @@
         "nvml",
         "openrgb",
         "ringbuffer",
-        "subsys"
+        "subsys",
+        "Winapi"
     ]
 }
