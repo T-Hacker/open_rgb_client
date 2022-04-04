@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
             _ => { /* Do nothing. */ }
         };
     } else {
-        launch_client(None, None).await?;
+        launch_client(None).await?;
     }
 
     Ok(())
@@ -108,11 +108,6 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
         // Create a shutdown notification to signal the main loop to stop accepting more connection.
         let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-
-        // Create a notification to signal when the main loop stopped processing more connections.
-        #[allow(clippy::mutex_atomic)]
-        let shutdown_completed_condv =
-            Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
         // Define system service event handler that will be receiving service events.
         let shutdown_notify_copy = shutdown_notify.clone();
@@ -151,30 +146,18 @@ fn my_service_main(_arguments: Vec<OsString>) {
             .unwrap();
 
         // Start main work loop.
-        info!("Launching code to run requests...");
-        {
-            let shutdown_notify = shutdown_notify.clone();
-            let shutdown_completed_condv = shutdown_completed_condv.clone();
+        let exit_code = match launch_client(shutdown_notify.into()).await {
+            Ok(_) => {
+                info!("Stopping without errors.");
 
-            tokio::spawn(async move {
-                match launch_client(
-                    shutdown_notify.into(),
-                    shutdown_completed_condv.clone().into(),
-                )
-                .await
-                {
-                    Ok(_) => info!("Exiting form loop, cleanly."),
-                    Err(e) => error!("Exiting from loop with error: {}", e),
-                };
-            });
-        }
+                0 // No error.
+            }
+            Err(e) => {
+                error!("Exiting from loop with error: {}", e);
 
-        // Wait for the conditional variable for signal the end of the work loop is set.
-        let (lock, cvar) = &*shutdown_completed_condv;
-        let mut ended = lock.lock().unwrap();
-        while !*ended {
-            ended = cvar.wait(ended).unwrap();
-        }
+                std::process::exit(-1); // Exit with error to force Windows to restart the service.
+            }
+        };
 
         // Tell the system that service has stopped.
         info!("Service is stopping...");
@@ -183,7 +166,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
                 service_type: SERVICE_TYPE,
                 current_state: ServiceState::Stopped,
                 controls_accepted: ServiceControlAccept::empty(),
-                exit_code: ServiceExitCode::Win32(0),
+                exit_code: ServiceExitCode::Win32(exit_code),
                 checkpoint: 0,
                 wait_hint: Duration::default(),
                 process_id: None,
@@ -192,10 +175,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
     });
 }
 
-async fn launch_client(
-    shutdown_notify: Option<Arc<tokio::sync::Notify>>,
-    shutdown_completed_condv: Option<Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>>,
-) -> Result<()> {
+async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Result<()> {
     info!("Connecting to OpenRGB...");
 
     let client = loop {
@@ -221,22 +201,13 @@ async fn launch_client(
         loop {
             tokio::select! {
                 _ = shutdown_notify.notified() => break,
-                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => { if !result.is_ok() { break; }}
+                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => result?,
             }
         }
     } else {
         while (sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await).is_ok() {
             // Do nothing.
         }
-    }
-
-    // Signal that the work as stopped.
-    if let Some(shutdown_completed_condv) = shutdown_completed_condv {
-        let (lock, cvar) = &*shutdown_completed_condv;
-        let mut ended = lock.lock().unwrap();
-        *ended = true;
-
-        cvar.notify_all();
     }
 
     Ok(())
