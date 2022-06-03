@@ -91,6 +91,8 @@ async fn main() -> Result<()> {
         launch_client(None).await?;
     }
 
+    info!("Done.");
+
     Ok(())
 }
 
@@ -205,8 +207,14 @@ async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Res
             }
         }
     } else {
-        while (sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await).is_ok() {
-            // Do nothing.
+        loop {
+            if let Err(e) =
+                sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await
+            {
+                error!("Failed to sample and set: {:?}", e);
+
+                break;
+            }
         }
     }
 
