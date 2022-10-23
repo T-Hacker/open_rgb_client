@@ -192,7 +192,7 @@ async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Res
     };
 
     info!("Initializing GPU monitoring...");
-    let nvml = nvml::NVML::init()?;
+    let nvml = nvml::Nvml::init()?;
     let device = nvml.device_by_index(0)?;
 
     let sample_buffer_size = next_power_of_two(SAMPLE_BUFFER_SIZE as u32) as usize;
@@ -237,7 +237,7 @@ async fn sample_and_set<'nvml>(
 
     let cpu_usage = cpu_samples
         .iter()
-        .map(|sample| *sample)
+        .copied()
         .reduce(|accum, sample| accum + sample)
         .unwrap_or_default();
     let cpu_usage = cpu_usage / cpu_samples.len() as f32;
@@ -249,13 +249,13 @@ async fn sample_and_set<'nvml>(
 
     let gpu_usage = gpu_samples
         .iter()
-        .map(|sample| *sample)
+        .copied()
         .reduce(|accum, sample| accum + sample)
         .unwrap_or_default();
     let gpu_usage = gpu_usage / gpu_samples.len() as f32;
 
     set_all_light_color(
-        &client,
+        client,
         cpu_usage,
         gpu_usage,
         &Color::new(0xFF, 0xFF, 0xFF),

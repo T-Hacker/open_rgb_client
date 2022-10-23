@@ -2,6 +2,7 @@
     "editor.formatOnPaste": true,
     "editor.formatOnSave": true,
     "cSpell.words": [
+        "accum",
         "AORUS",
         "condv",
         "Condvar",
@@ -13,6 +14,7 @@
         "nvml",
         "openrgb",
         "ringbuffer",
+        "simplelog",
         "subsys",
         "Winapi"
     ]
