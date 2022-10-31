@@ -203,7 +203,11 @@ async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Res
         loop {
             tokio::select! {
                 _ = shutdown_notify.notified() => break,
-                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => result?,
+                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => {
+                    if let Err(e) = result {
+                        error!("Failed to sample and set: {}", e);
+                    }
+                }
             }
         }
     } else {
@@ -211,9 +215,7 @@ async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Res
             if let Err(e) =
                 sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await
             {
-                error!("Failed to sample and set: {:?}", e);
-
-                break;
+                error!("Failed to sample and set: {}", e);
             }
         }
     }
