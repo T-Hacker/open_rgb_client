@@ -3,7 +3,7 @@ mod color_manager;
 extern crate nvml_wrapper as nvml;
 
 use crate::color_manager::set_all_light_color;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use cpu_monitor::CpuInstant;
 use log::*;
 use nvml::Device;
@@ -14,11 +14,14 @@ use simplelog::{
 };
 use std::{
     ffi::{OsStr, OsString},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::Duration,
 };
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, sync::Notify};
 use windows_service::{
     define_windows_service,
     service::{
@@ -41,6 +44,11 @@ const SAMPLE_RATE: u64 = 500;
 const SAMPLE_BUFFER_SIZE: usize = (SAMPLE_TIME * (1.0 + 1.0 / SAMPLE_RATE as f32)) as usize;
 
 const LOG_FILE: &str = "open_rgb_client_log.txt";
+
+struct ShutdownSignal {
+    shutdown_notify: Arc<Notify>,
+    should_shutdown: AtomicBool,
+}
 
 define_windows_service!(ffi_service_main, my_service_main);
 
@@ -109,10 +117,13 @@ fn my_service_main(_arguments: Vec<OsString>) {
         info!("Async runtime is initialized.");
 
         // Create a shutdown notification to signal the main loop to stop accepting more connection.
-        let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+        let shutdown_signal = Arc::new(ShutdownSignal {
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+            should_shutdown: AtomicBool::new(false),
+        });
 
         // Define system service event handler that will be receiving service events.
-        let shutdown_notify_copy = shutdown_notify.clone();
+        let shutdown_signal_copy = shutdown_signal.clone();
         let event_handler = move |control_event| -> ServiceControlHandlerResult {
             match control_event {
                 // Notifies a service to report its current status information to the service
@@ -121,7 +132,13 @@ fn my_service_main(_arguments: Vec<OsString>) {
 
                 // Handle stop
                 ServiceControl::Stop => {
-                    shutdown_notify_copy.notify_waiters();
+                    shutdown_signal_copy
+                        .should_shutdown
+                        .store(true, Ordering::Relaxed);
+                    shutdown_signal_copy.shutdown_notify.notify_waiters();
+
+                    info!("Giving time to shutdown gracefully...");
+                    thread::sleep(Duration::from_secs(1));
 
                     ServiceControlHandlerResult::NoError
                 }
@@ -148,7 +165,7 @@ fn my_service_main(_arguments: Vec<OsString>) {
             .unwrap();
 
         // Start main work loop.
-        let exit_code = match launch_client(shutdown_notify.into()).await {
+        let exit_code = match launch_client(shutdown_signal.into()).await {
             Ok(_) => {
                 info!("Stopping without errors.");
 
@@ -177,11 +194,24 @@ fn my_service_main(_arguments: Vec<OsString>) {
     });
 }
 
-async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Result<()> {
+async fn launch_client(shutdown_signal: Option<Arc<ShutdownSignal>>) -> Result<()> {
     info!("Connecting to OpenRGB...");
 
     let client = loop {
-        if let Ok(client) = OpenRGB::connect().await {
+        let client = if let Some(shutdown_signal) = &shutdown_signal {
+            if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
+            tokio::select! {
+                _ = shutdown_signal.shutdown_notify.notified() => continue,
+                client = OpenRGB::connect() => client,
+            }
+        } else {
+            OpenRGB::connect().await
+        };
+
+        if let Ok(client) = client {
             info!("Connected.");
 
             break client;
@@ -199,28 +229,34 @@ async fn launch_client(shutdown_notify: Option<Arc<tokio::sync::Notify>>) -> Res
     let mut cpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
     let mut gpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
 
-    if let Some(shutdown_notify) = shutdown_notify {
+    if let Some(shutdown_signal) = &shutdown_signal {
+        info!("Starting service loop...");
+
         loop {
+            if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
             tokio::select! {
-                _ = shutdown_notify.notified() => break,
+                _ = shutdown_signal.shutdown_notify.notified() => continue,
                 result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => {
                     if let Err(e) = result {
-                        error!("Failed to sample and set: {}", e);
+                        bail!("Failed to sample and set: {}", e);
                     }
                 }
             }
         }
     } else {
+        info!("Starting normal process loop...");
+
         loop {
             if let Err(e) =
                 sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await
             {
-                error!("Failed to sample and set: {}", e);
+                bail!("Failed to sample and set: {}", e);
             }
         }
     }
-
-    Ok(())
 }
 
 async fn sample_and_set<'nvml>(
