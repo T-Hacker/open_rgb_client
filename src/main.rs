@@ -3,7 +3,7 @@ mod color_manager;
 extern crate nvml_wrapper as nvml;
 
 use crate::color_manager::set_all_light_color;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use cpu_monitor::CpuInstant;
 use log::*;
 use nvml::Device;
@@ -195,65 +195,71 @@ fn my_service_main(_arguments: Vec<OsString>) {
 }
 
 async fn launch_client(shutdown_signal: Option<Arc<ShutdownSignal>>) -> Result<()> {
-    info!("Connecting to OpenRGB...");
+    loop {
+        info!("Connecting to OpenRGB...");
 
-    let client = loop {
-        let client = if let Some(shutdown_signal) = &shutdown_signal {
-            if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
-                return Ok(());
-            }
+        let client = loop {
+            let client = if let Some(shutdown_signal) = &shutdown_signal {
+                if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
 
-            tokio::select! {
-                _ = shutdown_signal.shutdown_notify.notified() => continue,
-                client = OpenRGB::connect() => client,
+                tokio::select! {
+                    _ = shutdown_signal.shutdown_notify.notified() => continue,
+                    client = OpenRGB::connect() => client,
+                }
+            } else {
+                OpenRGB::connect().await
+            };
+
+            if let Ok(client) = client {
+                info!("Connected.");
+
+                break client;
+            } else {
+                warn!("Failed to connect to OpenRGB. Retrying...");
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
-        } else {
-            OpenRGB::connect().await
         };
 
-        if let Ok(client) = client {
-            info!("Connected.");
+        info!("Initializing GPU monitoring...");
+        let nvml = nvml::Nvml::init()?;
+        let device = nvml.device_by_index(0)?;
 
-            break client;
-        } else {
-            warn!("Failed to connect to OpenRGB. Retrying...");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    };
+        let sample_buffer_size = next_power_of_two(SAMPLE_BUFFER_SIZE as u32) as usize;
+        let mut cpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
+        let mut gpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
 
-    info!("Initializing GPU monitoring...");
-    let nvml = nvml::Nvml::init()?;
-    let device = nvml.device_by_index(0)?;
+        if let Some(shutdown_signal) = &shutdown_signal {
+            info!("Starting service loop...");
 
-    let sample_buffer_size = next_power_of_two(SAMPLE_BUFFER_SIZE as u32) as usize;
-    let mut cpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
-    let mut gpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
+            loop {
+                if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
 
-    if let Some(shutdown_signal) = &shutdown_signal {
-        info!("Starting service loop...");
+                tokio::select! {
+                    _ = shutdown_signal.shutdown_notify.notified() => continue,
+                    result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => {
+                        if let Err(e) = result {
+                            error!("Failed to sample and set: {}", e);
 
-        loop {
-            if shutdown_signal.should_shutdown.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-
-            tokio::select! {
-                _ = shutdown_signal.shutdown_notify.notified() => continue,
-                result = sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples) => {
-                    if let Err(e) = result {
-                        bail!("Failed to sample and set: {}", e);
+                            break;
+                        }
                     }
                 }
             }
-        }
-    } else {
-        info!("Starting normal process loop...");
+        } else {
+            info!("Starting normal process loop...");
 
-        loop {
-            if let Err(e) =
-                sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await
-            {
-                bail!("Failed to sample and set: {}", e);
+            loop {
+                if let Err(e) =
+                    sample_and_set(&client, &device, &mut cpu_samples, &mut gpu_samples).await
+                {
+                    error!("Failed to sample and set: {}", e);
+
+                    break;
+                }
             }
         }
     }
