@@ -1,13 +1,13 @@
 use anyhow::Result;
 
 pub fn start_service() {
-    todo!();
+    unreachable!()
 }
 
 pub async fn install_service() -> Result<()> {
-    todo!();
+    unreachable!()
 }
 
 pub async fn remove_service() -> Result<()> {
-    todo!();
+    unreachable!()
 }
