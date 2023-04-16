@@ -1,0 +1,8 @@
+[Unit]
+Description=Open RGB Client to set lights based on system usage.
+
+[Service]
+ExecStart=/home/pedro/.cargo/bin/open_rgb_client
+
+[Install]
+WantedBy=multi-user.target
