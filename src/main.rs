@@ -8,6 +8,9 @@ mod linux;
 
 extern crate nvml_wrapper as nvml;
 
+#[cfg(target_os = "windows")]
+use crate::windows::{install_service, remove_service, start_service};
+
 #[cfg(not(target_os = "windows"))]
 use crate::linux::{install_service, remove_service, start_service};
 
