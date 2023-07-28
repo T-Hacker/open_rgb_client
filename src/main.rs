@@ -20,7 +20,7 @@ use cpu_monitor::CpuInstant;
 use log::*;
 use nvml::Device;
 use openrgb::{data::Color, OpenRGB};
-use ringbuffer::{AllocRingBuffer, RingBuffer, RingBufferExt, RingBufferWrite};
+use ringbuffer::{AllocRingBuffer, RingBuffer};
 use simplelog::{
     ColorChoice, CombinedLogger, Config, SharedLogger, TermLogger, TerminalMode, WriteLogger,
 };
@@ -129,8 +129,8 @@ async fn launch_client(shutdown_signal: Option<Arc<ShutdownSignal>>) -> Result<(
         let device = nvml.device_by_index(0)?;
 
         let sample_buffer_size = next_power_of_two(SAMPLE_BUFFER_SIZE as u32) as usize;
-        let mut cpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
-        let mut gpu_samples = AllocRingBuffer::with_capacity(sample_buffer_size);
+        let mut cpu_samples = AllocRingBuffer::new(sample_buffer_size);
+        let mut gpu_samples = AllocRingBuffer::new(sample_buffer_size);
 
         if let Some(shutdown_signal) = &shutdown_signal {
             info!("Starting service loop...");

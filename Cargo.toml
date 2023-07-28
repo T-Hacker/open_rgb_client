@@ -12,7 +12,7 @@ log = "0.4.17"
 log-panics = "2.1.0"
 nvml-wrapper = "0.9.0"
 openrgb = "0.1.2"
-ringbuffer = "0.13.0"
+ringbuffer = "0.14.2"
 simplelog = "0.12.1"
 tokio = { version = "1.27.0", features = ["full"] }
 
